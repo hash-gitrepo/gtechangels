@@ -7,7 +7,14 @@
 
 [build.environment]
   NEXT_TELEMETRY_DISABLED = "1"
+  # Pinned so `crypto.subtle` (src/lib/signedTicket.ts) is a stable Node
+  # global with no extra import — that landed in Node 20, not 18.
+  NODE_VERSION = "20"
 
 # Prisma needs the correct query engine binary for Netlify's Lambda runtime.
 # `binaryTargets` in prisma/schema.prisma already includes "rhel-openssl-3.0.x"
 # for this; keep it in sync if Netlify changes its base image.
+
+# Pitch deck storage (FR-18) uses Netlify Blobs, not a separate service —
+# no extra plugin or config needed here, it's available to Functions and
+# Edge Functions automatically on any Netlify site.

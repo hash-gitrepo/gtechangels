@@ -41,8 +41,13 @@ export default async function StartupDetailPage({ params }: { params: { id: stri
           <p className="text-sm bg-black/[.03] rounded-md p-3">{startup.helpDetails}</p>
         )}
 
-        {startup.pitchDeckUrl && (
-          <a href={startup.pitchDeckUrl} target="_blank" rel="noreferrer" className="text-brand hover:underline text-sm">
+        {startup.pitchDeckKey && (
+          <a
+            href={`/api/pitch-deck/${startup.id}`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-brand hover:underline text-sm"
+          >
             View pitch deck (PDF)
           </a>
         )}

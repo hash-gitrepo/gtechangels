@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
-import { signPitchDeckUpload } from "@/lib/cloudinary";
+import { issueTicket } from "@/lib/signedTicket";
 
-// Step 1 of the direct-to-Cloudinary upload: returns a short-lived signature
-// scoped to this startup's folder/public_id. The browser then PUTs the PDF
-// straight to Cloudinary (see step 2 in ../route.ts) — the file itself never
-// passes through a Netlify function, which is capped well under 20MB.
+// Step 1 of 3 for FR-18: runs on the Node runtime (it needs Prisma) to check
+// the caller owns a startup profile, then hands back a short-lived ticket
+// authorizing an upload to that exact blob key. See ../blob/route.ts for why
+// the actual file transfer happens on a separate Edge route.
 export async function POST() {
   const session = await getSession();
   if (!session || session.user.role !== "STARTUP") {
@@ -18,5 +18,8 @@ export async function POST() {
     return NextResponse.json({ error: "Startup profile not found" }, { status: 404 });
   }
 
-  return NextResponse.json(signPitchDeckUpload(startup.id));
+  const key = `${startup.id}.pdf`;
+  const ticket = await issueTicket("upload-deck", key, 300);
+
+  return NextResponse.json({ ticket, key });
 }

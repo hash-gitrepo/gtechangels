@@ -10,14 +10,14 @@ requirements are referenced by ID, e.g. `FR-18`, throughout the codebase).
 - **Prisma ORM** + **PostgreSQL** (hosted on [Railway](https://railway.app))
 - **NextAuth.js** — OTP/magic-link login, no passwords ever stored
 - **Resend** — transactional email (login codes, approvals, introductions, screening outcomes)
-- **Cloudinary** — pitch deck PDF uploads (max 20MB), uploaded directly from the browser
+- **Netlify Blobs** — pitch deck PDF uploads (max 20MB), uploaded directly from the browser
 - **Netlify** — hosting, via `@netlify/plugin-nextjs`
 
 ## Getting started
 
 ```bash
 npm install
-cp .env.example .env   # fill in DATABASE_URL, NEXTAUTH_SECRET, RESEND_API_KEY, CLOUDINARY_*
+cp .env.example .env   # fill in DATABASE_URL, NEXTAUTH_SECRET, RESEND_API_KEY
 npm run db:push        # or `npm run db:migrate` once you're versioning migrations
 npm run db:seed        # seeds controlled lists (sectors, domains, ...)
 npm run dev
@@ -32,6 +32,12 @@ sent — useful for local development. The OTP is also embedded in a link in
 the (would-be) email body, so `console.log`ing it is enough to sign in
 without a working inbox.
 
+**Pitch deck upload needs `netlify dev`, not plain `next dev`.** Netlify
+Blobs (see below) only has a working local backend under the Netlify CLI —
+run `npx netlify dev` instead once you've linked the project with
+`npx netlify link` (or `netlify init` for a fresh site). Every other feature
+works fine under plain `next dev`.
+
 ## Project layout
 
 ```
@@ -41,12 +47,15 @@ prisma/schema.prisma       7 core entities (Member, Startup, ScreeningRecord,
                             and supporting tables (ControlledList, AuditLog).
 src/lib/auth/               OTP issuing/verification + NextAuth options
 src/lib/email/              Resend client, HTML templates, typed senders
-src/lib/cloudinary.ts       Signed direct-to-Cloudinary upload (see below)
+src/lib/signedTicket.ts     HMAC tickets bridging Node (Prisma) and Edge
+                            (no size cap) routes — see pitch deck notes below
 src/lib/actions/            Server Actions for mutations (screening,
                             introductions, outcomes, events)
 src/lib/kpi.ts              FR-32 KPI dashboard query
 src/middleware.ts           Role-based route protection
 src/app/(auth|signup)/      Public auth & signup flows
+src/app/api/upload/pitch-deck/   3-step pitch deck upload (sign → blob → persist)
+src/app/api/pitch-deck/[id]/     2-step gated pitch deck viewing (authorize → stream)
 src/app/angel/               Angel dashboard: directory + introduction requests
 src/app/startup/             Startup dashboard: profile, deck upload, angel directory
 src/app/admin/               Screening, introductions, outcomes, events, KPIs
@@ -60,12 +69,22 @@ src/app/leadership/          View-only KPI dashboard
   backs a custom 6-digit code flow (`src/lib/auth/otp.ts`), reusing the
   `VerificationToken` table as code storage. Sessions are JWT-based because
   Credentials providers can't use NextAuth's database session strategy.
-- **Pitch decks upload straight to Cloudinary from the browser**
-  (`src/lib/cloudinary.ts` signs the request, the client PUTs the file,
-  then a small JSON callback persists the URL). Netlify's Lambda-based
-  functions cap request bodies well under 20MB, so proxying the PDF through
-  an API route would break for larger decks — signed direct upload avoids
-  that entirely.
+- **Pitch decks are split across a Node route and an Edge route, both ways.**
+  Netlify's Node Functions (AWS Lambda) cap request/response bodies well
+  under 20MB; Prisma can't run on the Edge runtime that doesn't have that
+  cap. So authorization (needs Prisma) and the file transfer (needs no size
+  cap) are always different routes, bridged by a short-lived HMAC ticket
+  (`src/lib/signedTicket.ts`) so the Edge route can trust the Node route's
+  auth check without touching the database itself:
+  - **Upload** (`src/app/api/upload/pitch-deck/`): `sign` (Node, issues a
+    ticket) → `blob` (Edge, writes the PDF to Netlify Blobs) → the parent
+    route (Node, small JSON body, records the blob key on `Startup`).
+  - **View** (`src/app/api/pitch-deck/[startupId]/`): the parent route
+    (Node, checks the viewer is the owning startup, an approved angel, or a
+    reviewer) 307-redirects to `stream` (Edge, verifies the ticket and
+    streams the PDF from Blobs) — this is also what makes the confidentiality
+    NFR ("decks accessible only to approved angels") actually enforced,
+    rather than just an unguarded public URL.
 - **FR-02 (member register verification)** is stubbed in
   `src/lib/memberRegister.ts` and currently always passes. Wire it to
   whatever the Secretariat's actual member register turns out to be.
@@ -98,4 +117,4 @@ are ready for that UI.
   `@netlify/plugin-nextjs`. Set the same env vars from `.env.example` in the
   Netlify site's environment settings, plus `NEXTAUTH_URL` set to the live domain.
 - **Resend:** verify your sending domain before going live, or `EMAIL_FROM` will bounce.
-- **Cloudinary:** no extra setup — the signed-upload flow works against any Cloudinary account.
+- **Pitch decks:** no extra setup — Netlify Blobs is available on any Netlify site with zero config once deployed.

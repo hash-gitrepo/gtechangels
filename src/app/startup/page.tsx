@@ -28,7 +28,7 @@ export default async function StartupDashboard() {
             <span>Visible to angels: {startup.isVisibleToAngels ? "Yes" : "Not yet"}</span>
             <span>{startup.sector} &middot; {startup.stage.replace("_", " ")}</span>
           </div>
-          <PitchDeckUpload currentUrl={startup.pitchDeckUrl} />
+          <PitchDeckUpload startupId={startup.id} hasDeck={!!startup.pitchDeckKey} />
         </section>
 
         <section>

@@ -297,9 +297,10 @@ model Startup {
   helpSought   HelpSoughtType?
   helpDetails  String?
 
-  // Pitch deck — FR-18 (Cloudinary, PDF, max 20MB, enforced at upload API)
-  pitchDeckUrl        String?
-  pitchDeckPublicId   String?
+  // Pitch deck — FR-18 (Netlify Blobs, PDF, max 20MB, enforced at upload API).
+  // pitchDeckKey is the Blobs store key ("<startupId>.pdf"); the file itself
+  // is only ever served through the ticket-gated /api/pitch-deck route.
+  pitchDeckKey        String?
   pitchDeckUploadedAt DateTime?
 
   // Denormalized from the latest ScreeningRecord for fast directory filtering.
