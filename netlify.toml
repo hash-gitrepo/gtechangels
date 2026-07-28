@@ -1,0 +1,13 @@
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+[build.environment]
+  NEXT_TELEMETRY_DISABLED = "1"
+
+# Prisma needs the correct query engine binary for Netlify's Lambda runtime.
+# `binaryTargets` in prisma/schema.prisma already includes "rhel-openssl-3.0.x"
+# for this; keep it in sync if Netlify changes its base image.

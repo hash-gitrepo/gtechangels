@@ -1,0 +1,557 @@
+// GTECH Angels Platform — Prisma schema
+// PostgreSQL (Railway). Auth model shape follows the NextAuth.js Prisma adapter
+// convention; VerificationToken doubles as OTP storage (see lib/auth/otp.ts).
+//
+// Seven core entities per PRD Section 6: Member (Angel), Startup, ScreeningRecord,
+// Introduction, Investment, Partnership, Event. Everything else here (User/Account/
+// Session/VerificationToken, ControlledList, AuditLog, and the join tables) is
+// supporting infrastructure required by the FRs, not an eighth core entity.
+
+generator client {
+  provider      = "prisma-client-js"
+  // "native" for local dev, "rhel-openssl-3.0.x" for Netlify's AWS Lambda
+  // runtime — without this the client fails to load in production.
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Auth (NextAuth.js — Prisma adapter shape, OTP/magic-link only, no passwords)
+// ---------------------------------------------------------------------------
+
+enum Role {
+  ANGEL
+  STARTUP
+  ADMIN
+  SCREENER
+  LEADERSHIP
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String?
+  image         String?
+  role          Role      @default(ANGEL)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  member   Member?
+  startup  Startup?
+
+  screeningRecords    ScreeningRecord[]   @relation("ScreenerToRecord")
+  facilitatedIntros   Introduction[]      @relation("AdminFacilitatedIntro")
+  enteredInvestments  Investment[]        @relation("AdminEnteredInvestment")
+  enteredPartnerships Partnership[]       @relation("AdminEnteredPartnership")
+  auditLogs           AuditLog[]
+
+  @@map("users")
+}
+
+// Kept for NextAuth Prisma adapter compatibility (OAuth not used in MVP but the
+// adapter expects this model to exist).
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// Reused for OTP codes: identifier = email, token = sha256(code). `attempts`
+// enforces per-code brute-force limits; requests-per-window rate limiting is
+// enforced in application code by counting recent rows for the identifier.
+model VerificationToken {
+  id        String   @id @default(cuid())
+  identifier String
+  token      String
+  attempts   Int      @default(0)
+  expires    DateTime
+  createdAt  DateTime @default(now())
+
+  @@unique([identifier, token])
+  @@index([identifier])
+  @@map("verification_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Shared enums
+// ---------------------------------------------------------------------------
+
+enum Region {
+  TRIVANDRUM
+  KOCHI
+  CALICUT
+  OTHER
+}
+
+enum Stage {
+  IDEA
+  MVP
+  EARLY_REVENUE
+  GROWTH
+}
+
+enum VisibilityOption {
+  EXACT
+  BAND
+  ADMIN_ONLY
+}
+
+enum PartnershipType {
+  CUSTOMER_INTRO
+  CHANNEL
+  PILOT
+  MENTORING
+}
+
+enum MemberStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  REJECTED
+  SUSPENDED
+}
+
+enum ScreeningState {
+  APPLIED
+  IN_SCREENING
+  APPROVED
+  REJECTED
+  ON_HOLD
+}
+
+enum IntroductionRequestedBy {
+  ANGEL
+  STARTUP
+  ADMIN
+}
+
+enum IntroductionState {
+  REQUESTED
+  ACCEPTED
+  DECLINED
+  MEETING_HELD
+  PROGRESSING
+  CLOSED
+}
+
+enum HelpSoughtType {
+  CAPITAL
+  MARKET_ACCESS
+  BOTH
+}
+
+enum PartnershipOutcomeType {
+  CUSTOMER_INTRO_CONVERTED
+  CHANNEL
+  PILOT
+  OTHER
+}
+
+enum RSVPStatus {
+  GOING
+  NOT_GOING
+  MAYBE
+}
+
+enum ControlledListType {
+  SECTOR
+  TECH_DOMAIN
+  INDUSTRY_DOMAIN
+  MARKET_GEOGRAPHY
+  PARTNERSHIP_TYPE
+  HELP_TYPE
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 1/7 — Member (Angel)
+// ---------------------------------------------------------------------------
+
+model Member {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Identity — FR-06
+  name        String
+  companyName String
+  designation String?
+  linkedIn    String?
+  region      Region
+  referredBy  String? // outreach owner or ecosystem partner — FR-04
+
+  // Expertise declaration — FR-07 (controlled-list values, see ControlledList)
+  technologyDomains String[]
+  industryDomains   String[]
+  marketGeographies String[]
+  expertiseNotes    String?
+
+  // Investment declaration — FR-08
+  committedAmount  Decimal? @db.Decimal(14, 2)
+  ticketSizeMin    Decimal? @db.Decimal(14, 2)
+  ticketSizeMax    Decimal? @db.Decimal(14, 2)
+  preferredStages  Stage[]
+  preferredSectors String[]
+
+  // Market-access declaration — FR-09
+  clientSegments   String[]
+  partnershipTypes PartnershipType[]
+
+  // Visibility control — FR-10 (default: BAND)
+  amountVisibility VisibilityOption @default(BAND)
+
+  // Profile completeness — FR-11
+  profileCompleteness Int @default(0)
+
+  status MemberStatus @default(PENDING_VERIFICATION)
+
+  // DPDP consent — FR-05
+  consentAcceptedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  introductions        Introduction[]
+  investmentStakes      InvestmentParticipant[]
+  partnerships          Partnership[]
+  eventRsvps            EventRSVP[]
+
+  @@index([region])
+  @@index([status])
+  @@map("members")
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 2/7 — Startup
+// ---------------------------------------------------------------------------
+
+model Startup {
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Identity — FR-12
+  name                String
+  founders            String[]
+  incorporationStatus String?
+  region              Region
+  website             String?
+  linkedIn            String?
+  referredBy          String? // outreach owner or ecosystem partner — FR-04
+
+  // Stage & sector — FR-13 (sector is a controlled-list value)
+  stage  Stage
+  sector String
+
+  // ICP — FR-14
+  icpSegment      String?
+  icpBuyerPersona String?
+  icpGeography    String?
+
+  // Traction — FR-15
+  arrMrrBand        String?
+  customerCount     Int?
+  growthRate        String?
+  notableCustomers  String?
+  lastTractionAt    DateTime? // drives the > 6 month staleness flag — FR-19
+
+  // Funding ask — FR-16
+  fundingAskAmount     Decimal? @db.Decimal(14, 2)
+  instrumentPreference String?
+  useOfFunds           String?
+  priorFunding         String?
+
+  // Help sought — FR-17
+  helpSought   HelpSoughtType?
+  helpDetails  String?
+
+  // Pitch deck — FR-18 (Cloudinary, PDF, max 20MB, enforced at upload API)
+  pitchDeckUrl        String?
+  pitchDeckPublicId   String?
+  pitchDeckUploadedAt DateTime?
+
+  // Denormalized from the latest ScreeningRecord for fast directory filtering.
+  // ScreeningRecord remains the source of truth / audit history — FR-20.
+  currentScreeningState ScreeningState @default(APPLIED)
+  isVisibleToAngels     Boolean        @default(false)
+
+  // DPDP consent — FR-05
+  consentAcceptedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  screeningRecords ScreeningRecord[]
+  introductions    Introduction[]
+  investments      Investment[]
+  partnerships     Partnership[]
+  eventRsvps       EventRSVP[]
+
+  @@index([region])
+  @@index([sector])
+  @@index([stage])
+  @@index([currentScreeningState])
+  @@map("startups")
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 3/7 — ScreeningRecord
+// ---------------------------------------------------------------------------
+
+model ScreeningRecord {
+  id        String @id @default(cuid())
+  startupId String
+  startup   Startup @relation(fields: [startupId], references: [id], onDelete: Cascade)
+
+  state ScreeningState @default(APPLIED) // FR-20
+
+  // Scorecard criteria/weights/scores per the Deal Screening owner's framework — FR-21
+  scorecard  Json?
+  totalScore Decimal? @db.Decimal(6, 2)
+
+  screenerId String?
+  screener   User? @relation("ScreenerToRecord", fields: [screenerId], references: [id])
+
+  // Internal-only notes; rejection is templated for the startup, not verbatim — FR-22
+  notes                String?
+  rejectionEmailSentAt DateTime?
+
+  appliedAt DateTime  @default(now())
+  slaDueAt  DateTime? // appliedAt + 14 days, for the SLA indicator — FR-23
+  decidedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([startupId])
+  @@index([state])
+  @@map("screening_records")
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 4/7 — Introduction
+// ---------------------------------------------------------------------------
+
+model Introduction {
+  id String @id @default(cuid())
+
+  memberId  String
+  member    Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  startupId String
+  startup   Startup @relation(fields: [startupId], references: [id], onDelete: Cascade)
+
+  requestedBy IntroductionRequestedBy // FR-26
+  contextNote String?
+
+  state IntroductionState @default(REQUESTED) // FR-27
+
+  facilitatedByAdmin Boolean @default(true) // admin-facilitated by default (Open Q3)
+  facilitatedById    String?
+  facilitatedBy      User?   @relation("AdminFacilitatedIntro", fields: [facilitatedById], references: [id])
+
+  requestedAt   DateTime  @default(now())
+  respondedAt   DateTime?
+  meetingHeldAt DateTime?
+  closedAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  investments  Investment[]
+  partnerships Partnership[]
+
+  @@index([memberId])
+  @@index([startupId])
+  @@index([state])
+  @@map("introductions")
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 5/7 — Investment (KPI 1 source of truth)
+// ---------------------------------------------------------------------------
+
+model Investment {
+  id String @id @default(cuid())
+
+  startupId String
+  startup   Startup @relation(fields: [startupId], references: [id], onDelete: Cascade)
+
+  amount Decimal @db.Decimal(14, 2) // FR-30
+  date   DateTime
+  stage  Stage // startup stage at time of investment
+
+  sourceIntroductionId String?
+  sourceIntroduction   Introduction? @relation(fields: [sourceIntroductionId], references: [id])
+
+  enteredByAdminId String
+  enteredByAdmin   User   @relation("AdminEnteredInvestment", fields: [enteredByAdminId], references: [id])
+
+  confirmedByStartupAt DateTime?
+  confirmedByAngelAt   DateTime?
+
+  isShareable Boolean @default(false) // FR-34
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  participants InvestmentParticipant[]
+
+  @@index([startupId])
+  @@index([date])
+  @@map("investments")
+}
+
+// Join table: an investment may involve multiple angels, each with their own amount.
+model InvestmentParticipant {
+  id           String     @id @default(cuid())
+  investmentId String
+  investment   Investment @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+  memberId     String
+  member       Member     @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  amount       Decimal?   @db.Decimal(14, 2)
+
+  @@unique([investmentId, memberId])
+  @@map("investment_participants")
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 6/7 — Partnership (KPI 2 source of truth)
+// ---------------------------------------------------------------------------
+
+model Partnership {
+  id String @id @default(cuid())
+
+  startupId String
+  startup   Startup @relation(fields: [startupId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    Member  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  type        PartnershipOutcomeType // FR-31
+  date        DateTime
+  description String?
+
+  sourceIntroductionId String?
+  sourceIntroduction   Introduction? @relation(fields: [sourceIntroductionId], references: [id])
+
+  enteredByAdminId String
+  enteredByAdmin   User   @relation("AdminEnteredPartnership", fields: [enteredByAdminId], references: [id])
+
+  isShareable Boolean @default(false) // FR-34
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([startupId])
+  @@index([memberId])
+  @@index([date])
+  @@map("partnerships")
+}
+
+// ---------------------------------------------------------------------------
+// Core entity 7/7 — Event
+// ---------------------------------------------------------------------------
+
+model Event {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  date        DateTime
+  venue       String
+  region      Region?
+
+  presentingStartupIds String[] // simple FR-35 cohort list (no join table needed for MVP)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rsvps EventRSVP[]
+
+  @@index([date])
+  @@map("events")
+}
+
+// Join table: angel RSVPs to an event; startups RSVP via presentingStartupIds join below.
+model EventRSVP {
+  id       String     @id @default(cuid())
+  eventId  String
+  event    Event      @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  memberId String?
+  member   Member?    @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  startupId String?
+  startup   Startup?  @relation(fields: [startupId], references: [id], onDelete: Cascade)
+  status   RSVPStatus @default(GOING)
+
+  respondedAt DateTime @default(now())
+
+  @@unique([eventId, memberId])
+  @@unique([eventId, startupId])
+  @@map("event_rsvps")
+}
+
+// ---------------------------------------------------------------------------
+// Supporting infrastructure
+// ---------------------------------------------------------------------------
+
+// Admin-managed controlled lists (sectors, domains, geographies, ...) — FR-37
+model ControlledList {
+  id        String             @id @default(cuid())
+  type      ControlledListType
+  value     String
+  isActive  Boolean            @default(true)
+  sortOrder Int                @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([type, value])
+  @@index([type])
+  @@map("controlled_lists")
+}
+
+// Audit log of admin actions — FR-38
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation(fields: [actorId], references: [id])
+  action     String
+  targetType String
+  targetId   String
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@map("audit_logs")
+}
