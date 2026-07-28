@@ -70,7 +70,15 @@ export async function POST(req: Request) {
     },
   });
 
-  await requestOtp(email);
+  try {
+    await requestOtp(email);
+  } catch (err) {
+    console.error(`[signup/startup] OTP send failed for ${email}:`, err);
+    return NextResponse.json(
+      { error: "Your profile was created, but we couldn't send the verification email. Try signing in again in a moment." },
+      { status: 502 }
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }

@@ -30,7 +30,11 @@ export async function POST(req: Request) {
     if (err instanceof OtpRateLimitError) {
       return NextResponse.json({ error: err.message }, { status: 429 });
     }
-    throw err;
+    console.error(`[auth/otp/request] OTP send failed for ${email}:`, err);
+    return NextResponse.json(
+      { error: "We couldn't send the login code. Try again in a moment." },
+      { status: 502 }
+    );
   }
 
   return NextResponse.json({ ok: true });

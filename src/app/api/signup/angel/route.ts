@@ -84,7 +84,20 @@ export async function POST(req: Request) {
     },
   });
 
-  await requestOtp(email);
+  try {
+    await requestOtp(email);
+  } catch (err) {
+    // The account row above already exists at this point — that's fine, the
+    // user can request a fresh code from /auth/signin once email sending is
+    // fixed. What we must not do is let this throw all the way up: an
+    // uncaught error here renders Next's generic HTML error page instead of
+    // JSON, which the client can't parse into a useful message.
+    console.error(`[signup/angel] OTP send failed for ${email}:`, err);
+    return NextResponse.json(
+      { error: "Your profile was created, but we couldn't send the verification email. Try signing in again in a moment." },
+      { status: 502 }
+    );
+  }
 
   return NextResponse.json({ ok: true });
 }
